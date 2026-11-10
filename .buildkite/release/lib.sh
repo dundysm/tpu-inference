@@ -149,6 +149,10 @@ resolve_vllm_tpu() {
 RELEASE_GAR="${RELEASE_GAR:-us-central1-docker.pkg.dev/cloud-ullm-inference-ci-cd/tpu-inference-ci}"
 # shellcheck disable=SC2034 # Read by build_images.sh.
 RELEASE_IMAGE="${RELEASE_GAR}/vllm-tpu"
+# A python:3.12-slim image holding the built wheels and serve_wheels.sh, so the
+# TPU check in tpu-inference-release-verify installs them as a user would.
+# shellcheck disable=SC2034 # Read by build_wheel_carrier_image.sh.
+RELEASE_WHEEL_CARRIER_IMAGE="${RELEASE_GAR}/vllm-tpu-wheel-carrier"
 # shellcheck disable=SC2034 # Read by build_images.sh.
 RELEASE_TAG_PREFIX="release-"
 RELEASE_DOCKERHUB_REPO="${RELEASE_DOCKERHUB_REPO:-vllm/vllm-tpu}"

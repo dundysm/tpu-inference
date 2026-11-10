@@ -15,8 +15,9 @@
 """Helper functions for building and publishing the release wheels.
 
 build_tpu_inference_wheel.sh and build_vllm_tpu_wheel.sh use the build
-checks. serve_wheels.sh uses the serve checks, run by the Python of the venv
-the wheels are installed into. publish_wheel.sh uses the publish checks for
+checks. serve_wheels.sh and serve_and_verify.sh use the install and serve
+checks, run by the Python of the vLLM install under test (the venv the wheels
+go into, or the staged image's). publish_wheel.sh uses the publish checks for
 tpu-inference and the combined vllm-tpu (wheel and sdist).
 """
 
@@ -51,8 +52,8 @@ def verify_built_wheel(wheel_path: str, expected_version: str) -> None:
 
 
 def verify_installed_wheels(version: str, venv: str) -> None:
-    """Verify the venv has vllm-tpu and tpu-inference <version>, imports them
-    from itself and runs vLLM on a TPU. Run by the venv's own Python."""
+    """Verify the venv has vllm-tpu and tpu-inference <version> and imports
+    them from itself. Run by the venv's own Python."""
     venv = os.path.realpath(venv)
     for dist in ("vllm-tpu", "tpu-inference"):
         installed = importlib.metadata.version(dist)
@@ -60,9 +61,7 @@ def verify_installed_wheels(version: str, venv: str) -> None:
             sys.exit(f"ERROR: {dist} {installed} is installed, not {version}.")
 
     # Imported here: only the venv the wheels went into has these.
-    import jax
     import vllm
-    from vllm.platforms import current_platform
 
     import tpu_inference
 
@@ -71,14 +70,28 @@ def verify_installed_wheels(version: str, venv: str) -> None:
         if not path.startswith(venv + os.sep):
             sys.exit(f"ERROR: {module.__name__} is imported from {path}, "
                      "not from the venv.")
+    print(f"vllm-tpu {version} (vLLM {vllm.__version__}), "
+          f"tpu-inference {version}, from {venv}")
+
+
+def verify_tpu_platform() -> None:
+    """Verify JAX sees a TPU and vLLM picks its TPU platform. Run by the
+    Python of the vLLM install under test."""
+    # Imported here: only the install under test has these.
+    import jax
+    import vllm
+    from vllm.platforms import current_platform
+
+    import tpu_inference
+
     devices = jax.devices()
     if not devices or devices[0].platform != "tpu":
         sys.exit(f"ERROR: JAX sees no TPU: {devices}")
     if not current_platform.is_tpu():
         sys.exit(f"ERROR: vLLM picked the {current_platform.device_name} "
                  "platform, not TPU.")
-    print(f"vllm-tpu {version} (vLLM {vllm.__version__}), "
-          f"tpu-inference {version}")
+    print(f"vLLM {vllm.__version__} from {os.path.dirname(vllm.__file__)}, "
+          f"tpu_inference from {os.path.dirname(tpu_inference.__file__)}")
     print(f"{current_platform.get_device_name()}: "
           f"{len(devices)} x {devices[0].device_kind}")
 
@@ -286,6 +299,7 @@ def main() -> None:
     commands = {
         "verify_built_wheel": verify_built_wheel,
         "verify_installed_wheels": verify_installed_wheels,
+        "verify_tpu_platform": verify_tpu_platform,
         "verify_server_answers": verify_server_answers,
         "verify_bench_result": verify_bench_result,
         "free_port": free_port,

@@ -19,8 +19,9 @@
 # builds of main and releases/v* only, so a release branch runs the release
 # tooling it was cut with. README.md has the how-to.
 #
-#   releases/vX.Y.Z   settle the version, build, wait for approval, then
-#                     publish (plan_publish.py)
+#   releases/vX.Y.Z   settle the version, build, check on TPU
+#                     (tpu-inference-release-verify, plan_verify.py), wait for
+#                     approval, then publish (plan_publish.py)
 
 steps:
   - label: ":clipboard: Preflight: version, PyPI"
@@ -39,28 +40,6 @@ steps:
     timeout_in_minutes: 60
     commands:
       - bash .buildkite/release/build_images.sh
-
-  # Serves the staged image on one v6e chip through the kube launcher, so a
-  # release that can't serve never reaches the publish block.
-  # TODO: the TPU Release cluster has no kube queue yet, so this step is skipped
-  # unless a build sets RELEASE_SMOKE_SKIP to an empty value. Drop the skip line
-  # once the queue exists.
-  - label: ":kubernetes: Smoke test: serve the staged image on TPU"
-    key: smoke_test
-    depends_on: build_images
-    if: build.branch =~ /^releases\/v[0-9]+\.[0-9]+\.[0-9]+$/
-    skip: "${RELEASE_SMOKE_SKIP-No kube queue in the TPU Release cluster yet}"
-    agents:
-      queue: kube
-    # Covers waiting for a chip as well as the model download and compile.
-    timeout_in_minutes: 180
-    env:
-      SHAPE: "ct6e-standard-1t/1x1"
-    plugins:
-      - kubernetes:
-          podTemplate: tpu-launcher
-    commands:
-      - bash .buildkite/release/smoke_test.sh
 
   - label: ":package: Build the tpu-inference wheel"
     key: build_tpu_inference_wheel
@@ -93,29 +72,27 @@ steps:
     commands:
       - bash .buildkite/release/check_wheels.sh
 
-  # The wheels' first run: install them into a fresh venv on a TPU, serve
-  # Llama-3.1-8B-Instruct and bench it, as done by hand before a release.
-  # TODO: release-tpu-inference-tpu-placeholder does not exist yet. It has to be a queue in
-  # the TPU Release cluster whose agent runs the job on a host with a TPU chip
-  # (one v6e chip is enough).
-  - label: ":test_tube: Serve the wheels on a TPU"
-    key: serve_wheels
+  # Carries the wheels, as plain files in a python:3.12-slim image, to the
+  # wheel check on TPU: tpu-inference-release-verify runs on the TPU CI
+  # cluster, which can't read this build's artifacts.
+  - label: ":docker: Stage the wheel carrier image"
+    key: build_wheel_carrier_image
     depends_on: check_wheels
-    if: build.branch =~ /^releases\/v[0-9]+\.[0-9]+\.[0-9]+$/
-    agents:
-      queue: release-tpu-inference-tpu-placeholder
-    timeout_in_minutes: 60
-    commands:
-      - bash .buildkite/release/serve_wheels.sh
-
-  - label: ":pipeline: Plan the approval and publish"
-    key: plan_publish
-    depends_on:
-      - build_images
-      - smoke_test
-      - check_wheels
-      - serve_wheels
     if: build.branch =~ /^releases\/v[0-9]+\.[0-9]+\.[0-9]+$/
     agents: *queue
     commands:
-      - python3 .buildkite/release/plan_publish.py | buildkite-agent pipeline upload --no-interpolation
+      - bash .buildkite/release/build_wheel_carrier_image.sh
+
+  # Uploads the TPU check (a trigger step that waits for
+  # tpu-inference-release-verify to verify the staged image and the wheels)
+  # and plan_publish behind it, so a release that fails on TPU never reaches
+  # the publish block.
+  - label: ":pipeline: Plan the TPU check"
+    key: plan_verify
+    depends_on:
+      - build_images
+      - build_wheel_carrier_image
+    if: build.branch =~ /^releases\/v[0-9]+\.[0-9]+\.[0-9]+$/
+    agents: *queue
+    commands:
+      - python3 .buildkite/release/plan_verify.py | buildkite-agent pipeline upload --no-interpolation

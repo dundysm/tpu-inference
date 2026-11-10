@@ -6,8 +6,10 @@ release. It builds the image and both wheels once from the release branch,
 stages the image in GAR and checks the wheels, waits for approval, then
 publishes those same bytes to Docker Hub and PyPI, so users get exactly what
 was built and approved. It runs only in the **TPU Release** cluster, on the
-`release-tpu-inference` queue, and its smoke test on that cluster's `kube`
-queue.
+`release-tpu-inference` queue. Its TPU check runs in a second pipeline,
+**tpu-inference-release-verify**, on the **TPU CI** cluster's `kube` queue: the
+release build triggers it and waits for it, and passes it only two image
+references, never a credential.
 
 The pipeline's settings upload [`pipeline.yml`](pipeline.yml) from the build's
 own checkout, and only for builds of `releases/v*`. A release branch runs the
@@ -35,11 +37,23 @@ branch.
      are `<commit>-<vllm commit>-<tpu>`, so the two never collide), and both
      wheels (`tpu-inference` and `vllm-tpu`);
    - **checks**: the wheels resolve together from pypi.org for CPython 3.12
-     on x86_64 Linux (`check_wheels.sh`);
-   - **smoke test**: serves `meta-llama/Llama-3.1-8B-Instruct` from the staged
-     image on one v6e chip and runs a 30-prompt `vllm bench serve` against it;
-     every request must complete (`smoke_test.sh`, `smoke_bench.sh`). Skipped
-     until the cluster's `kube` queue exists (see below).
+     on x86_64 Linux (`check_wheels.sh`); then a `python:3.12-slim` image
+     carries the wheel files, not installed, to the TPU check
+     (`vllm-tpu-wheel-carrier:release-<version>-build<N>`,
+     `build_wheel_carrier_image.sh`);
+   - **TPU check**: triggers tpu-inference-release-verify on the release
+     commit and waits for it (`plan_verify.py`, `verify_pipeline.yml`). Two
+     separate checks, on one v6e chip each, run the same serve flow
+     (`serve_and_verify.sh`): vLLM picks the TPU platform, it serves
+     `meta-llama/Llama-3.1-8B-Instruct` from fresh caches, answers a
+     completion and a chat, and completes every request of a 30-prompt
+     `vllm bench serve`. They differ only in which vLLM they run:
+     - **verify image**: the staged image's own (`verify_image_on_tpu.sh`);
+     - **verify wheels**: the wheels, installed into a fresh venv as a user's
+       `pip install` would, then checked for their versions
+       (`verify_wheels_on_tpu.sh`, `serve_wheels.sh`).
+
+     The publish block comes only after both pass.
 4. **Approve** the publish block. It names the staged digest and asks whether
    to move `latest` (never for a pre-release; no default) and whether an
    existing Docker Hub tag may be replaced. PyPI releases can't be replaced.
@@ -59,11 +73,23 @@ Build env knobs:
 |---|---|
 | `RELEASE_VERSION=vX.Y.Zrc1` | publish a pre-release under that version |
 | `RELEASE_APPROVER_TEAMS=a,b` | only these Buildkite teams can approve |
-| `RELEASE_SMOKE_SKIP=` (empty) | run the smoke test, skipped by default |
-| `SMOKE_MODEL=org/name` | model the smoke test serves |
+| `RELEASE_VERIFY_SKIP=<reason>` | skip the TPU check; an annotation says why |
+
+tpu-inference-release-verify knobs (its build env; the trigger sets the first
+two, as `<image>@sha256:<digest>`, and a check whose image is unset is left
+out):
+
+| Env | Effect |
+|---|---|
+| `RELEASE_IMAGE_REF` | verify image: the staged image to serve |
+| `WHEEL_CARRIER_IMAGE_REF` | verify wheels: the image carrying the wheels |
+| `VERIFY_MODEL=org/name` | model both checks serve |
+| `VERIFY_NUM_PROMPTS=<n>` | requests in both checks' bench |
+| `VERIFY_SERVER_TIMEOUT_S=<s>` | wait for `/health` (default 3600) |
 
 ## Pipeline settings (Buildkite, made by hand)
 
+tpu-inference-release, in the TPU Release cluster:
 - Repository `https://github.com/vllm-project/tpu-inference.git`.
 - GitHub: no builds on push or pull request (manual only).
 - Steps:
@@ -77,6 +103,22 @@ Build env knobs:
       command: buildkite-agent pipeline upload .buildkite/release/pipeline.yml
   ```
 
+tpu-inference-release-verify, in the TPU CI cluster:
+
+- Repository `https://github.com/vllm-project/tpu-inference.git`.
+- GitHub: no builds on push or pull request (triggered or manual only).
+- Teams: whoever starts tpu-inference-release builds needs Build access here,
+  or the trigger step fails.
+- Steps:
+
+  ```yaml
+  steps:
+    - label: ":pipeline: Upload the release verify steps"
+      agents:
+        queue: cpu
+      command: buildkite-agent pipeline upload .buildkite/release/verify_pipeline.yml
+  ```
+
 ## One-time setup outside this repo
 
 - Buildkite: the TPU Release cluster secret `DOCKERHUB_TOKEN_TPU_INFERENCE`
@@ -88,8 +130,7 @@ Build env knobs:
 - PyPI: a Google Trusted Publisher on both `tpu-inference` and `vllm-tpu` for
   the service account of the agents on the `release-tpu-inference` queue.
   Without it, `publish_wheel.sh` can't mint a token and uploads nothing.
-- A `kube` queue in the TPU Release cluster on the same TPU fleet as
-  tpu-inference-ci's (the `tpu-launcher` pod template). Its pods pull the
-  staged image from GAR and inherit an `HF_TOKEN` with access to
-  `meta-llama/Llama-3.1-8B-Instruct`. TODO: until it exists, `pipeline.yml`
-  skips the smoke test.
+- The TPU CI cluster's `kube` pods (the `tpu-launcher` pod template) can pull
+  both staged images from that GAR repository, reach pypi.org, astral.sh and
+  huggingface.co, and inherit an `HF_TOKEN` with access to
+  `meta-llama/Llama-3.1-8B-Instruct`.
