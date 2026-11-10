@@ -13,16 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Verify the staged release image on one TPU chip, before the publish block:
-# serve_and_verify.sh with the image's own vLLM, the same serve flow the wheels
-# are checked with (verify_wheels_on_tpu.sh). A step of
-# tpu-inference-release-verify (verify_pipeline.yml), on the kube queue: the
-# launcher (.buildkite/kubernetes/run.sh) starts the image as a TPU pod and
-# runs serve_and_verify.sh from the image's checkout.
+# Verify the staged release image on one TPU chip: run serve_and_verify.sh with
+# the image's own vLLM. verify_wheels_on_tpu.sh runs the same flow with the
+# wheels.
+#
+# A step of tpu-inference-release-verify (verify_pipeline.yml) on the kube
+# queue. The launcher (.buildkite/kubernetes/run.sh) starts the image as a TPU
+# pod and runs serve_and_verify.sh from the image's checkout of the release
+# commit.
 #
 # Environment:
-#   RELEASE_IMAGE_REF        The staged image, pinned by digest (set by the
-#                            release build's trigger step).
+#   RELEASE_IMAGE_REF        Image to verify, by digest. Default: meta-data
+#                            release-image of the triggering release build.
 #   VERIFY_MODEL             Model to serve (default:
 #                            meta-llama/Llama-3.1-8B-Instruct).
 #   VERIFY_NUM_PROMPTS       Requests in the bench (default: 30).
@@ -34,23 +36,19 @@ source "${SCRIPT_DIR}/lib.sh"
 
 MODEL="${VERIFY_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 NUM_PROMPTS="${VERIFY_NUM_PROMPTS:-30}"
-# The model download and the first TPU compile both happen before /health
-# answers.
+# Covers the model download and the first TPU compile.
 SERVER_TIMEOUT_S="${VERIFY_SERVER_TIMEOUT_S:-3600}"
 
-STAGED="${RELEASE_IMAGE_REF:-}"
-[[ "${STAGED}" == *@sha256:* ]] \
-  || die "RELEASE_IMAGE_REF must name an image by digest, got '${STAGED}'."
+IMAGE="$(release_build_image release-image "${RELEASE_IMAGE_REF:-}")"
+VERSION="$(release_build_version)"
+export WORKLOAD_IMAGE="${IMAGE}"
 
-# The exact image the publish step copies to Docker Hub.
-export WORKLOAD_IMAGE="${STAGED}"
-
-echo "--- :kubernetes: Verifying $(digest_of "${STAGED}") with ${MODEL} on ${SHAPE:-}"
-# An absolute path into the image's checkout of the release commit
-# (docker/Dockerfile), as CI's kube steps use: the launcher doesn't promise
-# which directory the command starts in.
+echo "--- :kubernetes: Verifying release ${VERSION}: image $(digest_of "${IMAGE}"), ${MODEL}, ${SHAPE:-}"
+# An absolute path into the image (docker/Dockerfile copies the checkout to
+# /workspace/tpu_inference): the launcher does not guarantee the working
+# directory, so CI's kube steps use absolute paths too.
 exec "${SCRIPT_DIR}/../kubernetes/run.sh" \
   env TEST_MODEL="${MODEL}" NUM_PROMPTS="${NUM_PROMPTS}" \
   SERVER_TIMEOUT_S="${SERVER_TIMEOUT_S}" \
   bash /workspace/tpu_inference/.buildkite/release/serve_and_verify.sh python3 image \
-  "the staged image ($(digest_of "${STAGED}"))"
+  "the staged image of release ${VERSION} ($(digest_of "${IMAGE}"))"

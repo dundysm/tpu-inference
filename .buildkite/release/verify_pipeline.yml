@@ -12,32 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# tpu-inference-release-verify: verifies a release's staged image and its
-# wheels on one v6e chip each, before the release's publish block. Two
-# separate checks, with the same serve flow (serve_and_verify.sh):
+# tpu-inference-release-verify: verifies a release's staged image and wheels on
+# TPU before the release reaches its approval block. Two independent checks,
+# one v6e chip each, both using serve_and_verify.sh:
 #   verify_image   the staged image's own vLLM (verify_image_on_tpu.sh)
 #   verify_wheels  the wheels, installed into a fresh venv
 #                  (verify_wheels_on_tpu.sh, serve_wheels.sh)
 #
-# Runs on the TPU CI cluster, which has the TPU fleet but none of the release's
-# credentials. The release build (plan_verify.py) triggers it on the release
-# commit and waits for it, passing only two image references, each pinned by
-# digest:
-#   RELEASE_IMAGE_REF        the staged image
-#   WHEEL_CARRIER_IMAGE_REF  python:3.12-slim carrying the built wheels as
-#                            files (build_wheel_carrier_image.sh)
-# A check whose reference is not set is left out, so a build started by hand
-# can run one of them.
+# Runs on the TPU CI cluster, which has the TPUs but none of the release
+# credentials. The release build's verify_on_tpu step (pipeline.yml, with
+# VLLM_SERVE_TEST=1) triggers it on the release commit and waits for the
+# result; only the commit is passed. Each check reads its image, by digest,
+# from the triggering build's meta-data (release_build_image in lib.sh):
+#   release-image          the staged release image
+#   release-wheel-carrier  python:3.12-slim with the wheels as files
+#                          (build_wheel_carrier.sh)
+# A build started by hand sets RELEASE_IMAGE_REF and WHEEL_CARRIER_REF instead.
 #
-# The pipeline's settings upload this file:
+# The pipeline settings upload this file:
 #   buildkite-agent pipeline upload .buildkite/release/verify_pipeline.yml
 
 x-tpu-step: &tpu-step
   agents:
     queue: kube
-  # Sized like CI's kube steps (pipeline_jax_kube.yml): it covers queueing for
-  # a chip as well as the model download, compile and bench. Not soft_fail:
-  # a failed check has to stop the release.
+  # As in CI's kube steps (pipeline_jax_kube.yml), the timeout also covers
+  # waiting for a chip. No soft_fail: a failed check must stop the release.
   timeout_in_minutes: 1440
   env:
     SHAPE: "ct6e-standard-1t/1x1"
@@ -48,14 +47,12 @@ x-tpu-step: &tpu-step
 steps:
   - label: ":kubernetes: Verify the staged image on TPU"
     key: verify_image
-    if: build.env("RELEASE_IMAGE_REF") != null
     <<: *tpu-step
     commands:
       - bash .buildkite/release/verify_image_on_tpu.sh
 
   - label: ":package: Verify the wheels on TPU"
     key: verify_wheels
-    if: build.env("WHEEL_CARRIER_IMAGE_REF") != null
     <<: *tpu-step
     commands:
       - bash .buildkite/release/verify_wheels_on_tpu.sh

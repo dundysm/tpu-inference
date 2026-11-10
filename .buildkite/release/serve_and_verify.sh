@@ -13,18 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Serve a model on a TPU with an installed vLLM and verify it: vLLM runs on
-# the TPU platform, the server becomes healthy, answers a completion and a
-# chat, and completes every request of a short `vllm bench serve`. The one
-# serve flow of both release checks on TPU:
+# Serve a model on a TPU with an installed vLLM and verify the result: vLLM
+# selects the TPU platform, the server becomes healthy, it answers a completion
+# and a chat request, and it completes every request of a short
+# `vllm bench serve`. Both release checks on TPU use this flow:
 #   verify image   the staged image's own vLLM (verify_image_on_tpu.sh)
 #   verify wheels  the wheels, installed into a fresh venv (serve_wheels.sh)
 #
-#   serve_and_verify.sh <python> <check> <what>
-#
-#   <python>  Python of the vLLM install to test; its `vllm` CLI must sit next
-#             to it. A bare name (python3) is looked up on PATH.
-#   <check>   Short name for the annotation context, e.g. image or wheels.
+# Usage: serve_and_verify.sh <python> <check> <what>
+#   <python>  Python interpreter of the vLLM install under test; the vllm CLI
+#             must be in the same directory. A bare name such as python3 is
+#             looked up on PATH.
+#   <check>   Short name of the check (image or wheels), used as the
+#             annotation context.
 #   <what>    What is being served, for the log and the annotation.
 #
 # Needs a TPU host (one v6e chip is enough for the default model) with curl
@@ -42,7 +43,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/lib.sh"
-# The serve checks, run below by the Python of the vLLM install under test.
+# The checks below run with the Python of the vLLM install under test.
 WHEEL_UTILS="${SCRIPT_DIR}/../scripts/wheel_utils.py"
 
 if [[ $# -ne 3 ]]; then
@@ -54,7 +55,7 @@ CHECK="$2"
 WHAT="$3"
 [[ "${PY}" == */* ]] || PY="$(command -v "${PY}")" || die "$1 not found on PATH."
 VLLM="$(dirname "${PY}")/vllm"
-[[ -x "${PY}" && -x "${VLLM}" ]] || die "no python and vllm CLI at ${PY}, ${VLLM}."
+[[ -x "${PY}" && -x "${VLLM}" ]] || die "expected a Python and the vllm CLI at ${PY} and ${VLLM}."
 
 TEST_MODEL="${TEST_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1024}"
@@ -103,9 +104,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Run from ${WORK}, not a checkout: vLLM starts some helpers with `python -m`,
-# which puts the working directory first on sys.path, so a checkout's
-# tpu_inference/ would shadow the install under test.
+# Run from ${WORK}, not from a checkout: vLLM starts some helpers with
+# `python -m`, which puts the working directory first on sys.path, so a
+# checkout's tpu_inference/ would shadow the install under test.
 cd "${WORK}"
 
 # --- The platform -----------------------------------------------------------
@@ -138,7 +139,7 @@ else
   "${SERVE_CMD[@]}" >"${SERVER_LOG}" 2>&1 &
 fi
 SERVER_PID=$!
-# Stream the server's log into the job's until the end.
+# Stream the server log into the job log until the server stops.
 tail -n +1 -f "${SERVER_LOG}" &
 TAIL_PID=$!
 

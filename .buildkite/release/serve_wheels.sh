@@ -13,13 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Serve the two wheels this build made on a TPU, as a user would after
+# Serve the two release wheels on a TPU the way a user would after
 # `pip install vllm-tpu==<version>`: install them into a fresh venv (everything
 # else from pypi.org), check the install, then serve and verify them with
-# serve_and_verify.sh, the same serve flow the staged image is checked with.
-# check_wheels.sh only resolves the wheels; this is the step that imports and
-# runs them - the "install the wheel, serve it and bench it" check otherwise
-# done by hand before a release.
+# serve_and_verify.sh, the same flow the staged image is checked with.
+# check_wheels.sh only resolves the wheels; this step imports and runs them,
+# the "install, serve and bench" check otherwise done by hand before a release.
 #
 # Needs a TPU host (one v6e chip is enough for the default model) with curl
 # and network access to pypi.org, astral.sh and huggingface.co; uv provides
@@ -33,7 +32,7 @@
 # Environment:
 #   WHEELS_DIR    Directory with tpu_inference-*.whl and vllm_tpu-*.whl; skips
 #                 the artifact download. In a release, verify_wheels_on_tpu.sh
-#                 sets it to the wheel carrier image's /wheels.
+#                 sets it to the wheel carrier's /wheels.
 #   WHEELS_BUILD  Build to download the wheel artifacts from (default: this
 #                 build).
 #   TEST_MODEL, MAX_MODEL_LEN, NUM_PROMPTS, SERVER_TIMEOUT_S
@@ -42,11 +41,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/lib.sh"
-# The install checks, run below by the Python of the venv the wheels go into.
+# The install checks below run with the Python of the venv the wheels go into.
 WHEEL_UTILS="${SCRIPT_DIR}/../scripts/wheel_utils.py"
 
-# pypi.org and the two wheels only, as for a user: no index that the agent or
-# the image configures for uv.
+# Only pypi.org and the two wheels, as for a user: ignore any uv index that
+# the agent or the image configures.
 unset UV_INDEX UV_INDEX_URL UV_DEFAULT_INDEX UV_EXTRA_INDEX_URL UV_FIND_LINKS \
   UV_NO_INDEX UV_OFFLINE
 
@@ -84,8 +83,8 @@ CORE_WHEEL="${CORE_WHEELS[0]}"
 COMBINED_WHEEL="${COMBINED_WHEELS[0]}"
 ls -l "${WORK}/dist"
 
-# The version is the second -separated part of a wheel's file name. The build
-# scripts already checked it is the release version; both must agree.
+# The version is the second dash-separated field of a wheel's file name. The
+# build scripts already checked it is the release version; both must agree.
 VERSION="$(basename "${CORE_WHEEL}" | cut -d- -f2)"
 [[ "$(basename "${COMBINED_WHEEL}" | cut -d- -f2)" == "${VERSION}" ]] \
   || die "the wheels disagree on the version: $(basename "${CORE_WHEEL}")," \
@@ -122,6 +121,7 @@ CLI_VERSION="$("${VENV_BIN}/vllm" --version 2>/dev/null | tail -n 1)" \
 echo "vllm --version: ${CLI_VERSION}"
 
 # --- Serve and verify -------------------------------------------------------
-# A child, not exec: this script's EXIT trap removes the venv afterwards.
+# Run as a child process rather than exec, so this script's EXIT trap still
+# removes the venv afterwards.
 bash "${SCRIPT_DIR}/serve_and_verify.sh" "${VENV_BIN}/python" wheels \
   "the built wheels in a fresh venv (vllm-tpu==${VERSION}, tpu-inference==${VERSION}, the rest from pypi.org)"

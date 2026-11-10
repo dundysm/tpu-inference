@@ -13,18 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Verify the release wheels on one TPU chip, before the publish block:
-# serve_wheels.sh installs them into a fresh venv and runs serve_and_verify.sh
-# with it, the same serve flow the staged image is checked with
-# (verify_image_on_tpu.sh). Runs in the wheel carrier image that
-# build_wheel_carrier_image.sh staged (python:3.12-slim with the wheels as
-# plain files in /wheels). A step of tpu-inference-release-verify
-# (verify_pipeline.yml), on the kube queue: the launcher
-# (.buildkite/kubernetes/run.sh) starts the image as a TPU pod.
+# Verify the release wheels on one TPU chip: serve_wheels.sh installs them into
+# a fresh venv and runs serve_and_verify.sh with it. verify_image_on_tpu.sh runs
+# the same flow with the staged image.
+#
+# A step of tpu-inference-release-verify (verify_pipeline.yml) on the kube
+# queue. The launcher (.buildkite/kubernetes/run.sh) starts the wheel carrier
+# (build_wheel_carrier.sh: python:3.12-slim with the wheels in /wheels) as a
+# TPU pod and runs serve_wheels.sh in it.
 #
 # Environment:
-#   WHEEL_CARRIER_IMAGE_REF  The wheel carrier image, pinned by digest (set by
-#                            the release build's trigger step).
+#   WHEEL_CARRIER_REF        Wheel carrier to verify, by digest. Default:
+#                            meta-data release-wheel-carrier of the triggering
+#                            release build.
 #   VERIFY_MODEL             Model to serve (default:
 #                            meta-llama/Llama-3.1-8B-Instruct).
 #   VERIFY_NUM_PROMPTS       Requests in the bench (default: 30).
@@ -36,19 +37,17 @@ source "${SCRIPT_DIR}/lib.sh"
 
 MODEL="${VERIFY_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 NUM_PROMPTS="${VERIFY_NUM_PROMPTS:-30}"
-# The model download and the first TPU compile both happen before /health
-# answers.
+# Covers the model download and the first TPU compile.
 SERVER_TIMEOUT_S="${VERIFY_SERVER_TIMEOUT_S:-3600}"
 
-IMAGE="${WHEEL_CARRIER_IMAGE_REF:-}"
-[[ "${IMAGE}" == *@sha256:* ]] \
-  || die "WHEEL_CARRIER_IMAGE_REF must name an image by digest, got '${IMAGE}'."
+IMAGE="$(release_build_image release-wheel-carrier "${WHEEL_CARRIER_REF:-}")"
+VERSION="$(release_build_version)"
 export WORKLOAD_IMAGE="${IMAGE}"
 
-echo "--- :kubernetes: Verifying the wheels in $(digest_of "${IMAGE}") with ${MODEL} on ${SHAPE:-}"
-# An absolute path into the image (build_wheel_carrier_image.sh), as CI's kube
-# steps use: the launcher doesn't promise which directory the command starts
-# in.
+echo "--- :kubernetes: Verifying release ${VERSION}: wheels in $(digest_of "${IMAGE}"), ${MODEL}, ${SHAPE:-}"
+# An absolute path into the carrier (build_wheel_carrier.sh): the launcher does
+# not guarantee the working directory, so CI's kube steps use absolute paths
+# too. serve_wheels.sh checks that the wheels carry the version they claim.
 exec "${SCRIPT_DIR}/../kubernetes/run.sh" \
   env WHEELS_DIR=/wheels TEST_MODEL="${MODEL}" NUM_PROMPTS="${NUM_PROMPTS}" \
   SERVER_TIMEOUT_S="${SERVER_TIMEOUT_S}" \

@@ -13,17 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Put the two wheels this build made into a carrier image for the wheel check
-# on TPU, and stage it in GAR as
-# vllm-tpu-wheel-carrier:release-<version>-build<N>.
+# Stage the wheels this build made in the wheel carrier, for the wheel check on
+# TPU (VLLM_SERVE_TEST=1): vllm-tpu-wheel-carrier:wheels-<version>-build<N> in
+# GAR, with its digest in meta-data release-wheel-carrier.
 #
-# The wheel check (verify_wheels_on_tpu.sh) runs in
-# tpu-inference-release-verify, on the TPU CI cluster, which can't read this
-# build's artifacts and only runs container images. This image only carries
-# the wheels there: python:3.12-slim with the .whl files in /wheels, not
-# installed, and the scripts serve_wheels.sh runs. No credentials go into it.
-# serve_wheels.sh installs the wheels into a fresh venv on the TPU host, as a
-# user would. Not a product image: the release image is build_images.sh's.
+# The wheel check (verify_wheels_on_tpu.sh) runs in tpu-inference-release-verify
+# on the TPU CI cluster, which cannot read this build's artifacts and only runs
+# container images. The carrier takes the wheels there: python:3.12-slim with
+# the .whl files in /wheels, not installed, plus the scripts serve_wheels.sh
+# runs. It holds no credentials and is never published; the release image is
+# build_images.sh's.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -31,9 +30,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 VERSION="$(release_version)"
-TAG="${RELEASE_WHEEL_CARRIER_IMAGE}:${RELEASE_TAG_PREFIX}${VERSION}-build${BUILDKITE_BUILD_NUMBER}"
+TAG="${RELEASE_WHEEL_CARRIER}:${WHEEL_CARRIER_TAG_PREFIX}${VERSION}-build${BUILDKITE_BUILD_NUMBER}"
 
-CTX="$(mktemp -d "${TMPDIR:-/tmp}/wheel-carrier-image.XXXXXX")"
+CTX="$(mktemp -d "${TMPDIR:-/tmp}/wheel-carrier.XXXXXX")"
 trap 'rm -rf "${CTX}"; docker rmi "${TAG}" >/dev/null 2>&1 || true' EXIT
 
 echo "--- :inbox_tray: Wheels built in this build"
@@ -52,7 +51,7 @@ for wheel in "${CORE_WHEELS[0]}" "${COMBINED_WHEELS[0]}"; do
 done
 ls -l "${CTX}/dist"
 
-# serve_wheels.sh with the files it reads, at the same paths as in the repo.
+# The scripts serve_wheels.sh needs, at their repo paths.
 mkdir -p "${CTX}/repo/.buildkite/release" "${CTX}/repo/.buildkite/scripts"
 cp "${SCRIPT_DIR}/serve_wheels.sh" "${SCRIPT_DIR}/serve_and_verify.sh" \
   "${SCRIPT_DIR}/lib.sh" "${CTX}/repo/.buildkite/release/"
@@ -77,10 +76,10 @@ gcloud auth configure-docker "${RELEASE_GAR%%/*}" --quiet
 docker push "${TAG}"
 
 STAGED="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${TAG}" \
-  | grep -m 1 "^${RELEASE_WHEEL_CARRIER_IMAGE}@sha256:")" \
-  || die "no ${RELEASE_WHEEL_CARRIER_IMAGE} digest after the push."
-buildkite-agent meta-data set release-wheel-carrier-image "${STAGED}"
+  | grep -m 1 "^${RELEASE_WHEEL_CARRIER}@sha256:")" \
+  || die "no ${RELEASE_WHEEL_CARRIER} digest after the push."
+buildkite-agent meta-data set release-wheel-carrier "${STAGED}"
 
-buildkite-agent annotate --style info --context release-wheel-carrier-image <<EOF
-Wheel carrier image (GAR): \`${TAG}\` = \`$(digest_of "${STAGED}")\`, holding $(basename "${CORE_WHEELS[0]}") and $(basename "${COMBINED_WHEELS[0]}")
+buildkite-agent annotate --style info --context release-wheel-carrier <<EOF
+Wheel carrier (GAR): \`${TAG}\` = \`$(digest_of "${STAGED}")\`, holding $(basename "${CORE_WHEELS[0]}") and $(basename "${COMBINED_WHEELS[0]}")
 EOF
